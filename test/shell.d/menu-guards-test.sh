@@ -294,16 +294,16 @@ cat >"$cache_bin/pacman" <<'STUB'
 echo "$1" >>"$PACMAN_LOG"
 case "$1" in
 -Qq)
-  ls "$OMARCHY_PACMAN_DB_PATH/local" | sed 's/-[^-]*-[^-]*$//'
+  ls "$FIXTURE_DB/local" | sed 's/-[^-]*-[^-]*$//'
   ;;
 -Qi)
   [[ -z ${PACMAN_QI_FAILS:-} ]] || exit 1
   # A transaction landing while the set is being read.
   case "${PACMAN_DURING_QI:-}" in
-  install) mkdir -p "$OMARCHY_PACMAN_DB_PATH/local/zen-browser-bin-1.0-1" ;;
-  lock) touch "$OMARCHY_PACMAN_DB_PATH/db.lck" ;;
+  install) mkdir -p "$FIXTURE_DB/local/zen-browser-bin-1.0-1" ;;
+  lock) touch "$FIXTURE_DB/db.lck" ;;
   esac
-  if [[ -d $OMARCHY_PACMAN_DB_PATH/local/gvim-9.2-1 ]]; then
+  if [[ -d $FIXTURE_DB/local/gvim-9.2-1 ]]; then
     printf 'Name            : gvim\nProvides        : vim=9.2-1\n'
   fi
   ;;
@@ -312,7 +312,13 @@ case "$1" in
   ;;
 esac
 STUB
-chmod +x "$cache_bin/pacman"
+# pacman.conf's DBPath, which pacman-conf prints with a trailing slash.
+cat >"$cache_bin/pacman-conf" <<'STUB'
+#!/bin/bash
+[[ $1 == "DBPath" ]] || exit 1
+echo "$FIXTURE_DB/"
+STUB
+chmod +x "$cache_bin/pacman" "$cache_bin/pacman-conf"
 
 cache_script=$(node -e '
   const path = require("path")
@@ -336,7 +342,7 @@ batch() {
   local dir=$1
   shift
   : >"$dir/pacman.log"
-  env PATH="$cache_bin:$PATH" PACMAN_LOG="$dir/pacman.log" OMARCHY_PACMAN_DB_PATH="$dir/db" \
+  env PATH="$cache_bin:$PATH" PACMAN_LOG="$dir/pacman.log" FIXTURE_DB="$dir/db" OMARCHY_PACMAN_DB_PATH="$dir/db" \
     XDG_RUNTIME_DIR="$dir/runtime" "$@" bash -e -c "$cache_script" | sort | tr '\n' ' '
 }
 
@@ -363,6 +369,17 @@ mv "$dir/db/local/bash-5.3-1" "$dir/db/local/bash-5.3-2"
 batch "$dir" >/dev/null
 queried "$dir" || fail "an upgrade makes the next batch ask pacman"
 pass "installs, removals and upgrades reach the very next batch"
+
+# Without the test seam the database is wherever pacman.conf puts it, so a
+# DBPath away from /var/lib/pacman still moves the stamp the batch reads.
+dir=$(cache_case dbpath)
+batch "$dir" OMARCHY_PACMAN_DB_PATH= >/dev/null
+[[ -f $dir/runtime/omarchy-menu-packages ]] || fail "the database pacman-conf names is cached"
+mkdir "$dir/db/local/zen-browser-bin-1.0-1"
+[[ $(batch "$dir" OMARCHY_PACMAN_DB_PATH=) == "bash:w:1 vim:w:1 zen:w:1 " ]] ||
+  fail "an install in the database pacman-conf names reaches the next batch" "$(batch "$dir" OMARCHY_PACMAN_DB_PATH=)"
+queried "$dir" || fail "an install in the database pacman-conf names makes the next batch ask pacman"
+pass "the stamp follows the database pacman.conf's DBPath names"
 
 # A database pacman is still writing must not be remembered: the entry can
 # exist before its desc does, and nothing would move the stamp afterwards.

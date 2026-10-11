@@ -442,6 +442,10 @@ var GUARD_READERS = [
 // A build that failed is used for this run, as before, but never stored:
 // only when both queries succeed does it end with a `/` line, which no
 // package name can contain.
+//
+// The database is wherever pacman.conf's DBPath puts it, so pacman-conf
+// names the directory the stamp and lock are read from; one that cannot be
+// named is never cached.
 function guardPackageSnapshot() {
   var build = '{ set -o pipefail; pacman -Qq && LC_ALL=C pacman -Qi'
     + " | awk '/^[A-Za-z]/ { provides = ($0 ~ /^Provides/); sub(/^[^:]*: /, \"\") }"
@@ -449,9 +453,11 @@ function guardPackageSnapshot() {
     + ' for (i = 1; i <= n; i++) { sub(/[<>=].*/, "", p[i]); print p[i] } }\' && echo /; } 2>/dev/null'
   var stamp = 'stat -c "%d:%i:%.9Y:%.9Z" -- "$__omarchy_pkg_db/local" 2>/dev/null'
 
-  return '__omarchy_pkg_db=${OMARCHY_PACMAN_DB_PATH:-/var/lib/pacman}\n'
+  return '__omarchy_pkg_db=${OMARCHY_PACMAN_DB_PATH:-$(pacman-conf DBPath 2>/dev/null)} || __omarchy_pkg_db=""\n'
+    + '__omarchy_pkg_db=${__omarchy_pkg_db%/}\n'
     + '__omarchy_pkg_cache=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/omarchy-menu-packages}\n'
-    + '__omarchy_pkg_stamp=$(' + stamp + ') || __omarchy_pkg_stamp=""\n'
+    + '__omarchy_pkg_stamp=""\n'
+    + '[[ -z $__omarchy_pkg_db ]] || __omarchy_pkg_stamp=$(' + stamp + ') || __omarchy_pkg_stamp=""\n'
     + '__omarchy_pkg_names=()\n'
     + 'if [[ -n $__omarchy_pkg_cache && -n $__omarchy_pkg_stamp ]]'
     + ' && { IFS= read -r __omarchy_pkg_line && [[ $__omarchy_pkg_line == "$__omarchy_pkg_stamp" ]]'
