@@ -130,14 +130,20 @@ assert(panel.includes('onNodesChanged: volumeSinkResolveTimer.restart()') && /ta
   'node and link changes resolve the volume sink again')
 {
   const body = panel.match(/function resolveVolumeSink\(\) \{([\s\S]*?)\n  \}/)[1]
-  const resolve = new Function('sink', 'volumeSinkProc', 'state', body.replace(/volumeSinkName =/g, 'state.volumeSinkName =').replace(/volumeSinkStale =/g, 'state.volumeSinkStale ='))
+  const resolve = new Function('sink', 'volumeSinkProc', 'state', body.replace(/\b(volumeSinkName|volumeSinkStale|volumeSinkGeneration|volumeSinkRequest)\b/g, 'state.$1'))
+  const finished = new Function('root', 'text', panel.match(/onStreamFinished: \{\s*(if \(root\.volumeSinkRequest[^\n]*)/)[1])
   const proc = { running: false }
-  const state = { volumeSinkName: '', volumeSinkStale: false }
+  const state = { volumeSinkName: '', volumeSinkStale: false, volumeSinkGeneration: 0, volumeSinkRequest: -1 }
   resolve({ name: 'alsa_output.pci-0000_00_1f.3.analog-stereo' }, proc, state)
   assert(!proc.running && state.volumeSinkName === 'alsa_output.pci-0000_00_1f.3.analog-stereo', 'a hardware output resolves to itself without the script')
   resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
   assert(proc.running, 'a DSP output resolves through the script')
   resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
   assert(state.volumeSinkStale, 'a change during a resolve runs it again afterwards')
+  resolve({ name: 'alsa_output.usb-headset' }, proc, state)
+  finished(state, 'alsa_output.speakers\n')
+  assertEqual(state.volumeSinkName, 'alsa_output.usb-headset', 'a script read that predates a switch to hardware cannot overwrite it')
 }
+assert(/path: [^\n]*"\/easyeffects\/db\/easyeffectsrc"\s*watchChanges: true\s*printErrors: false\s*onFileChanged: volumeSinkResolveTimer\.restart\(\)/.test(panel),
+  "EasyEffects' configured output is watched, since an idle EasyEffects resolves through it")
 JS

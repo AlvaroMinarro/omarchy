@@ -166,8 +166,13 @@ Panel {
   }
 
   property bool volumeSinkStale: false
+  // Bumped by every resolve, so a script read still running from before cannot
+  // overwrite a newer answer, the hardware fast path's included.
+  property int volumeSinkGeneration: 0
+  property int volumeSinkRequest: -1
 
   function resolveVolumeSink() {
+    volumeSinkGeneration++
     // A hardware output is its own volume sink, as omarchy-audio-output-sink
     // reports without looking further, so only a DSP sink needs the script.
     if (sink && String(sink.name).indexOf("alsa_output.") === 0) {
@@ -178,7 +183,17 @@ Panel {
       volumeSinkStale = true
       return
     }
+    volumeSinkRequest = volumeSinkGeneration
     volumeSinkProc.running = true
+  }
+
+  // An idle EasyEffects is resolved through its configured output device, which
+  // changes without touching the Pipewire graph.
+  FileView {
+    path: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/easyeffects/db/easyeffectsrc"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: volumeSinkResolveTimer.restart()
   }
 
   readonly property real outputVolume: volumeSink && volumeSink.audio ? volumeSink.audio.volume : 0
@@ -675,7 +690,9 @@ Panel {
     command: ["omarchy-audio-output-sink"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.volumeSinkName = String(text).trim()
+      onStreamFinished: {
+        if (root.volumeSinkRequest === root.volumeSinkGeneration) root.volumeSinkName = String(text).trim()
+      }
     }
     onExited: {
       if (!root.volumeSinkStale) return
