@@ -349,12 +349,13 @@ load_route_candidates() {
   done
   while IFS= read -r file; do
     seen["$file"]=1
-  done < <(grep -l -E -e "omarchy:group=$first([^[:alnum:]_-]|$)" -e "omarchy:alias(es)?=.*omarchy $first( |\||$)" "$OMARCHY_BIN_DIR"/omarchy-* 2>/dev/null)
+  done < <(grep -l -E -e "omarchy:group=$first([^[:alnum:]_-]|$)" -e "omarchy:alias(es)?=.*omarchy[[:space:]]+$first([[:space:]]|\||$)" "$OMARCHY_BIN_DIR"/omarchy-* 2>/dev/null)
 
-  while IFS= read -r file; do
-    [[ -f $file && -x $file ]] || continue
+  # The full load's own glob, so colliding routes register in the same order.
+  for file in "$OMARCHY_BIN_DIR"/omarchy-*; do
+    [[ -n ${seen[$file]} && -f $file && -x $file ]] || continue
     register_command "$file"
-  done < <(printf '%s\n' "${!seen[@]}" | LC_ALL=C sort)
+  done
 }
 
 load_command_by_binary() {

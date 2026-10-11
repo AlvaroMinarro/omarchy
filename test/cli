@@ -775,3 +775,36 @@ output=$("$TMPDIR/omarchy" fastgroup moved four)
 assert_output_contains "a metadata-moved route dispatches" "$output" "fastgroup-ran args=[four]"
 output=$("$TMPDIR/omarchy" fastalias --help)
 assert_output_contains "help on an alias route still renders from the full table" "$output" "omarchy-zz-fastalias-target"
+
+# The candidates-only path must agree with a full load on every edge of the
+# metadata parser: tabs in an alias count as spaces, and colliding routes are
+# won by whichever command the full load's glob registers first.
+{
+  printf '#!/bin/bash\n\n# omarchy:summary=Tab alias root\n# omarchy:aliases=omarchy tabroute\n'
+  printf 'echo "tabroute-root-ran args=[$*]"\n'
+} >"$TMPDIR/omarchy-zz-tabroute-root"
+{
+  printf '#!/bin/bash\n\n# omarchy:summary=Tab alias deep\n# omarchy:aliases=omarchy\ttabroute deep\n'
+  printf 'echo "tabroute-deep-ran args=[$*]"\n'
+} >"$TMPDIR/omarchy-zz-tabroute-deep"
+{
+  printf '#!/bin/bash\n\n# omarchy:summary=Collision first\n# omarchy:aliases=omarchy collideprobe\n'
+  printf 'echo "collide-a-b-ran"\n'
+} >"$TMPDIR/omarchy-zz-a-b"
+{
+  printf '#!/bin/bash\n\n# omarchy:summary=Collision second\n# omarchy:aliases=omarchy collideprobe\n'
+  printf 'echo "collide-aa-ran"\n'
+} >"$TMPDIR/omarchy-zz-aa"
+chmod +x "$TMPDIR"/omarchy-zz-tabroute-* "$TMPDIR/omarchy-zz-a-b" "$TMPDIR/omarchy-zz-aa"
+
+output=$("$TMPDIR/omarchy" tabroute deep payload)
+assert_output_contains "a tab-separated alias still wins as the longer route" "$output" "tabroute-deep-ran args=[payload]"
+
+for locale in C "$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1)"; do
+  [[ -n $locale ]] || continue
+  ran=$(LC_ALL=$locale "$TMPDIR/omarchy" collideprobe)
+  helped=$(LC_ALL=$locale "$TMPDIR/omarchy" collideprobe --help)
+  expected=$( [[ $helped == *omarchy-zz-aa* ]] && echo collide-aa-ran || echo collide-a-b-ran )
+  [[ $ran == "$expected" ]] || fail "a colliding alias runs the command help names under LC_ALL=$locale"
+done
+pass "a colliding alias runs the command help names"
