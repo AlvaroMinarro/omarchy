@@ -808,3 +808,16 @@ for locale in C "$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1)
   [[ $ran == "$expected" ]] || fail "a colliding alias runs the command help names under LC_ALL=$locale"
 done
 pass "a colliding alias runs the command help names"
+
+# The fast path only reads candidate headers: an unrelated command that can't
+# be read goes unnoticed by an alias dispatch, while help, which loads the
+# whole table, trips over it.
+printf '#!/bin/bash\n\n# omarchy:summary=Unreadable unrelated command\necho unrelated\n' >"$TMPDIR/omarchy-zz-unreadable"
+chmod 111 "$TMPDIR/omarchy-zz-unreadable"
+stderr=$("$TMPDIR/omarchy" fastalias one 2>&1 >/dev/null)
+[[ $stderr != *"Permission denied"* ]] || fail "an alias dispatch reads only the commands that can own its route"
+stderr=$("$TMPDIR/omarchy" fastalias --help 2>&1 >/dev/null)
+[[ $stderr == *"Permission denied"* ]] || fail "alias help still loads the whole table"
+chmod 755 "$TMPDIR/omarchy-zz-unreadable"
+rm -f "$TMPDIR/omarchy-zz-unreadable"
+pass "an alias dispatch reads only the commands that can own its route"
