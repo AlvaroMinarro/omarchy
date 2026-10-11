@@ -85,7 +85,7 @@ prelude() {
     const path = require("path")
     const menu = require(path.join(process.env.ROOT, "shell/plugins/menu/MenuModel.js"))
     process.stdout.write(menu.guardScript({ probe: { id: "probe", when: "true" } }))
-  ' | command grep -vE '^(if \{|\{$|\} &$|wait$)'
+  ' | command sed '/^__omarchy_groups=()$/,$d'
 }
 
 # The prelude shadows the real commands for the length of the batch, so it has

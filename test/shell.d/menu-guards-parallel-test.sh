@@ -68,3 +68,21 @@ slow_output=$(bash -c "$slow_script")
 (($(sort -u <<<"$slow_output" | wc -l) == 20)) || fail "guard batch waits for its slowest group" "got: $slow_output"
 grep -qx 'row7:w:1' <<<"$slow_output" || fail "guard batch waits for its slowest group" "row7 missing"
 pass "guard batch exits only after its slowest group has answered"
+
+# A group that dies part way leaves its remaining rows unanswered, and the
+# menu keeps its last complete answers only when the batch fails. Under a
+# login shell's `set -u` an unset variable kills the group mid-guard.
+nounset_script=$(node -e '
+  const path = require("path")
+  const menu = require(path.join(process.env.ROOT, "shell/plugins/menu/MenuModel.js"))
+  const items = {}
+  for (let i = 0; i < 20; i++) items[`row${i}`] = { id: `row${i}`, when: i === 3 ? "[[ -n $OMARCHY_TEST_UNSET ]]" : "true" }
+  process.stdout.write(menu.guardScript(items))
+')
+nounset_status=0
+env -u OMARCHY_TEST_UNSET bash -u -c "$nounset_script" >/dev/null 2>&1 || nounset_status=$?
+((nounset_status != 0)) || fail "a guard group that dies part way fails the batch"
+bash -c "$nounset_script" >/dev/null 2>&1 || fail "a batch whose groups all finish succeeds"
+OMARCHY_TEST_UNSET=set bash -u -c "$nounset_script" >/dev/null 2>&1 ||
+  fail "the batch itself runs under set -u when no guard trips it"
+pass "a guard group that dies part way fails the whole batch, so the menu keeps its last answers"

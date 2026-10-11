@@ -509,6 +509,11 @@ var GUARD_GROUPS = 8
 // and the batch exits once all of them have. Lines arrive in any order, which
 // the menu never relied on: each names its row, and each is one short write
 // to the pipe, which the kernel never interleaves.
+//
+// A group that dies part way (a guard tripping a login shell's `set -u`, say)
+// has left its remaining rows unanswered, and the menu keeps the last full
+// set only when the batch fails. So each group is waited for by pid, and the
+// batch's status is nonzero if any of them was.
 function guardScript(items) {
   var lines = []
   var ids = Object.keys(items || {})
@@ -528,9 +533,11 @@ function guardScript(items) {
     groups[group] = (groups[group] || "") + lines[j]
   }
 
-  var script = guardPrelude(lines.join(""))
-  for (var k = 0; k < groups.length; k++) script += "{\n" + groups[k] + "} &\n"
-  return script + "wait\n"
+  var script = guardPrelude(lines.join("")) + "__omarchy_groups=()\n"
+  for (var k = 0; k < groups.length; k++) script += "{\n" + groups[k] + "} &\n__omarchy_groups+=($!)\n"
+  return script + "__omarchy_failed=0\n"
+    + 'for __omarchy_group in "${__omarchy_groups[@]}"; do wait "$__omarchy_group" || __omarchy_failed=1; done\n'
+    + "((__omarchy_failed == 0))\n"
 }
 
 // An action that only asks this shell to summon one of its own plugins can be
