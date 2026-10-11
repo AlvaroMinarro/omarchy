@@ -4,11 +4,10 @@
 # omarchy:hidden=true
 
 FRAMEWORK16_THEME=$HOME/.local/state/omarchy/current/theme/keyboard.rgb
-FRAMEWORK16_APPLIED=$HOME/.local/state/omarchy/keyboard-f16.rgb
 
 # QMK hue and saturation on a 0-255 scale. The floating-point steps follow
-# Python's colorsys.rgb_to_hsv, which this replaces, so every colour truncates
-# to the same values it always did.
+# Python's colorsys.rgb_to_hsv, which this replaces to save starting Python on
+# every theme switch, so every colour truncates to the same values it always did.
 hex_to_qmk_hue_saturation() {
   awk -v r=$((16#${1:0:2})) -v g=$((16#${1:2:2})) -v b=$((16#${1:4:2})) 'BEGIN {
     r /= 255; g /= 255; b /= 255
@@ -32,30 +31,16 @@ hex_to_qmk_hue_saturation() {
 }
 
 if omarchy-cmd-present qmk_hid && [[ -f $FRAMEWORK16_THEME ]]; then
-  hex=$(<"$FRAMEWORK16_THEME")
+  hex=$(cat "$FRAMEWORK16_THEME")
   hex="${hex#\#}"
-  hex="${hex,,}"
 
-  [[ $hex =~ ^[0-9a-f]{6}$ ]] || exit 0
-
-  # The colour lives in the keyboard's EEPROM, so a theme with the same
-  # keyboard colour needs no writes: five HID round trips and an EEPROM save.
-  [[ $(cat "$FRAMEWORK16_APPLIED" 2>/dev/null) == "$hex" ]] && exit 0
+  [[ $hex =~ ^[0-9A-Fa-f]{6}$ ]] || exit 0
 
   read -r h s <<<"$(hex_to_qmk_hue_saturation "$hex")"
 
-  # The record only stands for a keyboard every write reached; one that took
-  # some of them holds neither the old colour nor the new one.
-  rm -f "$FRAMEWORK16_APPLIED"
-  failed=0
-  qmk_hid via --rgb-effect 1 2>/dev/null || failed=1
-  qmk_hid via --rgb-hue "$h" 2>/dev/null || failed=1
-  qmk_hid via --rgb-saturation "$s" 2>/dev/null || failed=1
-  qmk_hid via --rgb-brightness 100 2>/dev/null || failed=1
-  qmk_hid via --save 2>/dev/null || failed=1
-
-  if (( failed == 0 )); then
-    mkdir -p "${FRAMEWORK16_APPLIED%/*}"
-    echo "$hex" >"$FRAMEWORK16_APPLIED"
-  fi
+  qmk_hid via --rgb-effect 1 2>/dev/null
+  qmk_hid via --rgb-hue "$h" 2>/dev/null
+  qmk_hid via --rgb-saturation "$s" 2>/dev/null
+  qmk_hid via --rgb-brightness 100 2>/dev/null
+  qmk_hid via --save 2>/dev/null
 fi
