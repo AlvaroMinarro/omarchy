@@ -52,3 +52,19 @@ for (const file of users) {
 }
 pass('first-party keyboard panels build their content on first open')
 JS
+
+require_compositor "keyboard panel lazy content runtime test"
+require_command quickshell
+
+stage=$(mktemp -d)
+trap 'rm -rf -- "$stage"' EXIT
+ln -s "$ROOT/shell/Ui" "$stage/Ui"
+ln -s "$ROOT/shell/Commons" "$stage/Commons"
+cp "$SHELL_TEST_DIR/fixtures/keyboard-panel-lazy/shell.qml" "$stage/shell.qml"
+
+output=$(HOME="$stage" OMARCHY_PATH="$ROOT" timeout 30 quickshell -p "$stage" --no-color 2>&1) || fail "keyboard panel fixture exits cleanly" "$output"
+[[ $output == *"RESULT pass"* ]] || fail "keyboard panel lazy content assertions pass" "$output"
+if rg -q 'RESULT fail|ReferenceError|TypeError|Error:|Unable to assign|Binding loop' <<< "$output"; then
+  fail "keyboard panel fixture has no QML errors" "$output"
+fi
+pass "keyboard panel content builds on open, survives close, and is reused on reopen"
