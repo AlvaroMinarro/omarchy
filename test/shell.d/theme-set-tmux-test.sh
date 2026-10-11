@@ -4,23 +4,28 @@ source "$(dirname "$0")/base-test.sh"
 
 require_command tmux
 
-TEST_HOME=$(mktemp -d)
-# A tmux socket path must stay short, so the scratch server lives in /tmp.
-TMUX_TMPDIR=$(mktemp -d /tmp/omarchy-tmux-test.XXXXXX)
-export TMUX_TMPDIR
+REAL_TMUX=$(command -v tmux)
+TEST_HOME=$(mktemp -d) || fail "create a scratch home"
+# A tmux socket path must stay short, so the scratch server's socket lives in
+# /tmp. Every tmux call names it, so none can reach the user's own server.
+SOCKET_DIR=$(mktemp -d /tmp/omarchy-tmux-test.XXXXXX) || fail "create a scratch tmux socket directory"
+TMUX_SOCKET="$SOCKET_DIR/tmux"
 unset TMUX
-trap 'tmux kill-server 2>/dev/null; rm -rf "$TEST_HOME" "$TMUX_TMPDIR"' EXIT
+trap '"$REAL_TMUX" -S "$TMUX_SOCKET" kill-server 2>/dev/null; rm -rf "$TEST_HOME" "$SOCKET_DIR"' EXIT
+
+tmux() {
+  "$REAL_TMUX" -S "$TMUX_SOCKET" "$@"
+}
 
 FAKE_BIN="$TEST_HOME/bin"
 CURRENT_THEME="$TEST_HOME/.local/state/omarchy/current/theme"
 TMUX_LOG="$TEST_HOME/tmux.log"
-REAL_TMUX=$(command -v tmux)
 mkdir -p "$FAKE_BIN" "$CURRENT_THEME"
 
 cat >"$FAKE_BIN/tmux" <<EOF
 #!/bin/bash
 printf '%s\n' "\$1" >>"$TMUX_LOG"
-exec "$REAL_TMUX" -f /dev/null "\$@"
+exec "$REAL_TMUX" -S "$TMUX_SOCKET" -f /dev/null "\$@"
 EOF
 chmod +x "$FAKE_BIN/tmux"
 
