@@ -42,8 +42,10 @@ EOF
   printf '%s\n' "hl.env(\"QUOTED\", \"it's \$HOME ~ #{session_name} a;b\")"
 } >"$CURRENT_THEME/gum_env.lua"
 
+# Panes run a plain sleep under the scratch home, so no shell startup file of
+# the developer's runs or writes anywhere.
 for session in one two three; do
-  "$FAKE_BIN/tmux" new-session -d -s "$session"
+  HOME="$TEST_HOME" "$FAKE_BIN/tmux" new-session -d -s "$session" "exec sleep 600"
 done
 : >"$TMUX_LOG"
 
