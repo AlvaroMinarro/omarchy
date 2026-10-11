@@ -1086,7 +1086,8 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: { root.defaultMenuItems = root.parseMenuJsonc(text()); root.defaultMenuSettled = true; root.rebuildItemsFromSources() }
-    onLoadFailed: root.defaultMenuSettled = true
+    // A user file that loaded first held its evaluation for this one.
+    onLoadFailed: { root.defaultMenuSettled = true; if (root.userMenuSettled) root.evaluateGuards() }
     onFileChanged: reload()
   }
 
