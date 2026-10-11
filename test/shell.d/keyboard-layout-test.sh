@@ -167,7 +167,25 @@ assertEqual(model.eventKeyboardName({}), '', 'an event with nothing in it names 
   proc.running = false
   load(state, proc)
   assert(!proc.running, 'the table is read only once')
-  assert(widget.includes('readonly property bool needsBriefs: layoutsRead && (multipleLayouts || multipleInputs)'),
-    'a label is needed for several layouts or several input methods, once the layouts are known')
+  assert(widget.includes('onNeedsBriefsChanged: loadBriefs()'), 'the table loads as soon as a label is needed')
+
+  // Drive the real keyboard reading, then the needsBriefs binding, as QML would.
+  const reading = new Function('root', 'KeyboardLayoutModel', 'text',
+    widget.match(/id: queryProc[\s\S]*?onStreamFinished: \{([\s\S]*?)\n      \}/)[1])
+  const needs = new Function('layoutsRead', 'multipleLayouts', 'multipleInputs',
+    'return ' + widget.match(/readonly property bool needsBriefs: ([^\n]+)/)[1])
+  const widgetState = layout => {
+    const w = { typedKeyboardName: '', multipleLayouts: true, layoutsRead: false }
+    w.typedKeyboards = keyboards => keyboards.filter(k => model.isTypedKeyboard(k.name))
+    w.selectKeyboard = typed => model.selectKeyboard(typed, w.typedKeyboardName)
+    reading(w, model, JSON.stringify({ keyboards: [{ name: 'at-translated-set-2-keyboard', main: true, layout, active_keymap: 'English (US)', active_layout_index: 0 }] }))
+    return w
+  }
+  const single = widgetState('us')
+  assert(single.layoutsRead && !needs(single.layoutsRead, single.multipleLayouts, false), 'a first reading of one layout needs no table')
+  assert(needs(single.layoutsRead, single.multipleLayouts, true), 'several input methods on one layout need the table')
+  const several = widgetState('us,dk')
+  assert(needs(several.layoutsRead, several.multipleLayouts, false), 'a first reading of several layouts needs the table')
+  assert(!needs(false, true, true), 'nothing is needed before the first reading')
 }
 JS
