@@ -44,11 +44,17 @@ if omarchy-cmd-present qmk_hid && [[ -f $FRAMEWORK16_THEME ]]; then
 
   read -r h s <<<"$(hex_to_qmk_hue_saturation "$hex")"
 
-  qmk_hid via --rgb-effect 1 2>/dev/null
-  qmk_hid via --rgb-hue "$h" 2>/dev/null
-  qmk_hid via --rgb-saturation "$s" 2>/dev/null
-  qmk_hid via --rgb-brightness 100 2>/dev/null
-  if qmk_hid via --save 2>/dev/null; then
+  # The record only stands for a keyboard every write reached; one that took
+  # some of them holds neither the old colour nor the new one.
+  rm -f "$FRAMEWORK16_APPLIED"
+  failed=0
+  qmk_hid via --rgb-effect 1 2>/dev/null || failed=1
+  qmk_hid via --rgb-hue "$h" 2>/dev/null || failed=1
+  qmk_hid via --rgb-saturation "$s" 2>/dev/null || failed=1
+  qmk_hid via --rgb-brightness 100 2>/dev/null || failed=1
+  qmk_hid via --save 2>/dev/null || failed=1
+
+  if (( failed == 0 )); then
     mkdir -p "${FRAMEWORK16_APPLIED%/*}"
     echo "$hex" >"$FRAMEWORK16_APPLIED"
   fi
