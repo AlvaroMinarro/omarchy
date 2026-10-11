@@ -45,6 +45,9 @@ ShellRoot {
     interval: 250
     running: true
     onTriggered: {
+      if (!Quickshell.env("NETWORK_TEST_PREVIEW"))
+        test.check(panel.testContent === null, "closed panel has not built its content")
+      test.check(panel.testEnsureContent() !== null && panel.testContent !== null, "panel content builds on demand")
       test.check(panel.kind === "wifi", "connected Wi-Fi fixture")
       test.check(panel.connectivity === "full", "normal connectivity")
       test.check(!panel.testButton.visible && !panel.testBarButton.active, "no false portal banner")
