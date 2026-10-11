@@ -125,4 +125,19 @@ const panel = read('shell/plugins/panels/audio/Panel.qml')
 assert(/inputPeakNode: inputViaWpctl \? null : source/.test(panel) && /inputLevelShown: !!inputPeakNode/.test(panel) &&
   /visible: root\.inputLevelShown[^}]*inputPeakMonitor\.peak/.test(panel),
   'the input level bar is hidden when the input is driven through wpctl')
+assert(!/Timer \{[^}]*repeat: true[^}]*resolveVolumeSink/.test(panel), 'no timer polls the volume sink')
+assert(panel.includes('onNodesChanged: volumeSinkResolveTimer.restart()') && /target: Pipewire\.linkGroups\s*function onValuesChanged\(\) \{ volumeSinkResolveTimer\.restart\(\) \}/.test(panel),
+  'node and link changes resolve the volume sink again')
+{
+  const body = panel.match(/function resolveVolumeSink\(\) \{([\s\S]*?)\n  \}/)[1]
+  const resolve = new Function('sink', 'volumeSinkProc', 'state', body.replace(/volumeSinkName =/g, 'state.volumeSinkName =').replace(/volumeSinkStale =/g, 'state.volumeSinkStale ='))
+  const proc = { running: false }
+  const state = { volumeSinkName: '', volumeSinkStale: false }
+  resolve({ name: 'alsa_output.pci-0000_00_1f.3.analog-stereo' }, proc, state)
+  assert(!proc.running && state.volumeSinkName === 'alsa_output.pci-0000_00_1f.3.analog-stereo', 'a hardware output resolves to itself without the script')
+  resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
+  assert(proc.running, 'a DSP output resolves through the script')
+  resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
+  assert(state.volumeSinkStale, 'a change during a resolve runs it again afterwards')
+}
 JS

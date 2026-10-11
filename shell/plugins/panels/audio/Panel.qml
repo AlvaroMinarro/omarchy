@@ -154,12 +154,31 @@ Panel {
     return sink
   }
 
-  // Re-resolve whenever the selected output changes; the timer below is only a
-  // safety net for the tuning being applied or removed underneath us.
+  // Re-resolve whenever the selected output changes, and when nodes or links
+  // come and go: a tuning being applied or removed underneath us, or a DSP sink
+  // rerouted to another output, shows up as exactly that.
   onSinkChanged: resolveVolumeSink()
+  onNodesChanged: volumeSinkResolveTimer.restart()
+
+  Connections {
+    target: Pipewire.linkGroups
+    function onValuesChanged() { volumeSinkResolveTimer.restart() }
+  }
+
+  property bool volumeSinkStale: false
 
   function resolveVolumeSink() {
-    if (!volumeSinkProc.running) volumeSinkProc.running = true
+    // A hardware output is its own volume sink, as omarchy-audio-output-sink
+    // reports without looking further, so only a DSP sink needs the script.
+    if (sink && String(sink.name).indexOf("alsa_output.") === 0) {
+      volumeSinkName = String(sink.name)
+      return
+    }
+    if (volumeSinkProc.running) {
+      volumeSinkStale = true
+      return
+    }
+    volumeSinkProc.running = true
   }
 
   readonly property real outputVolume: volumeSink && volumeSink.audio ? volumeSink.audio.volume : 0
@@ -658,6 +677,12 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.volumeSinkName = String(text).trim()
     }
+    onExited: {
+      if (!root.volumeSinkStale) return
+      root.volumeSinkStale = false
+      // Deferred: the process still reports running while it signals exit.
+      Qt.callLater(root.resolveVolumeSink)
+    }
   }
 
   Timer {
@@ -673,14 +698,15 @@ Panel {
 
   // Runs whether or not the panel is open: the bar shows and scrolls the output
   // volume too, so an unresolved sink there would read and change the virtual
-  // tuning sink instead of the speakers.
+  // tuning sink instead of the speakers. Streams starting and stopping also
+  // change the graph, so a burst of changes resolves once.
   Timer {
-    interval: 15000
-    running: true
-    repeat: true
-    triggeredOnStart: true
+    id: volumeSinkResolveTimer
+    interval: 500
     onTriggered: root.resolveVolumeSink()
   }
+
+  Component.onCompleted: root.resolveVolumeSink()
 
   Timer {
     id: audioModelRefreshTimer
