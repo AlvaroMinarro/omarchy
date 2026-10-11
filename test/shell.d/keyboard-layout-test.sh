@@ -153,4 +153,21 @@ assertEqual(model.eventKeyboardName(parsedEvent('at-translated-set-2-keyboard,En
 assertEqual(model.eventKeyboardName(rawEvent('hl-virtual-keyboard,English (US)')), '', 'the keyboard an input method injects through is not typed on')
 assertEqual(model.eventKeyboardName({ parse: () => { throw new Error('unsupported') }, data: 'kb,French' }), 'kb', 'a binding without parse falls back to the raw data')
 assertEqual(model.eventKeyboardName({}), '', 'an event with nothing in it names no keyboard')
+{
+  const widget = require('fs').readFileSync(path.join(root, 'shell/plugins/bar/widgets/KeyboardLayout.qml'), 'utf8')
+  assert(!/Component\.onCompleted: \{[\s\S]*?briefsProc\.running = true/.test(widget), 'the xkb layout table is not read at startup')
+  const load = new Function('state', 'briefsProc', widget.match(/function loadBriefs\(\) \{([\s\S]*?)\n  \}/)[1].replace(/\b(needsBriefs|briefsRequested)\b/g, 'state.$1'))
+  const proc = { running: false }
+  const state = { needsBriefs: false, briefsRequested: false }
+  load(state, proc)
+  assert(!proc.running, 'a seat with one layout and one input method never reads the table')
+  state.needsBriefs = true
+  load(state, proc)
+  assert(proc.running, 'the table is read once a label needs it')
+  proc.running = false
+  load(state, proc)
+  assert(!proc.running, 'the table is read only once')
+  assert(widget.includes('readonly property bool needsBriefs: layoutsRead && (multipleLayouts || multipleInputs)'),
+    'a label is needed for several layouts or several input methods, once the layouts are known')
+}
 JS
