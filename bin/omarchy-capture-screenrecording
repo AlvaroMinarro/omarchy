@@ -431,12 +431,18 @@ stop_screenrecording() {
 
     # Take the preview thumbnail from the raw recording while finalizing runs,
     # 0.2s in: the frame the finalized video, trimmed by 0.1s, shows at 0.1s.
-    # Finalizing replaces the file by renaming over it, so this read keeps the
-    # raw one open throughout.
-    ffmpeg -y -ss 00:00:00.2 -i "$filename" -vframes 1 -q:v 2 "$preview" -loglevel quiet 2>/dev/null &
-    local preview_pid=$!
+    # Finalizing renames its output over the file, so the raw one is held open
+    # here first and ffmpeg reads it through that descriptor, whenever it starts.
+    local raw_fd preview_pid=""
+    if exec {raw_fd}<"$filename"; then
+      ffmpeg -y -ss 00:00:00.2 -i "/proc/self/fd/$raw_fd" -vframes 1 -q:v 2 "$preview" -loglevel quiet 2>/dev/null &
+      preview_pid=$!
+    fi
     finalize_recording
-    wait "$preview_pid"
+    if [[ -n $preview_pid ]]; then
+      wait "$preview_pid"
+      exec {raw_fd}<&-
+    fi
     echo "$filename"
 
     omarchy-notification-send "Screen recording saved" "Open with Super + Alt + , (or click this)" \
