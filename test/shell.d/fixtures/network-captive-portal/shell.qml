@@ -153,7 +153,8 @@ ShellRoot {
     onTriggered: {
       var path = Quickshell.env("NETWORK_TEST_SCREENSHOT")
       if (!path) return
-      var card = panel.testKeys.parent.parent
+      // Content root -> Loader -> content holder -> card.
+      var card = panel.testKeys.parent.parent.parent
       card.grabToImage(function(result) {
         test.check(result.saveToFile(path), "save fresh preview screenshot")
         Qt.quit()
