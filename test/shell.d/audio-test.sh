@@ -139,7 +139,20 @@ assert(panel.includes('onNodesChanged: volumeSinkResolveTimer.restart()') && /ta
   resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
   assert(proc.running, 'a DSP output resolves through the script')
   resolve({ name: 'omarchy_speaker_tuning' }, proc, state)
-  assert(state.volumeSinkStale, 'a change during a resolve runs it again afterwards')
+  assert(state.volumeSinkStale, 'a change during a resolve is marked for a rerun')
+  {
+    // Quickshell still reports the process running while it signals exit.
+    const exited = new Function('root', 'Qt', panel.match(/id: volumeSinkProc[\s\S]*?onExited: \{([\s\S]*?)\n    \}/)[1])
+    const deferred = []
+    const sink = { name: 'omarchy_speaker_tuning' }
+    state.resolveVolumeSink = () => resolve(sink, proc, state)
+    const requestBefore = state.volumeSinkRequest
+    exited(state, { callLater: callback => deferred.push(callback) })
+    proc.running = false
+    assert(deferred.length === 1 && !state.volumeSinkStale, 'the rerun waits until the read has exited')
+    deferred.shift()()
+    assert(proc.running && state.volumeSinkRequest > requestBefore, 'a change during a resolve runs it again afterwards')
+  }
   resolve({ name: 'alsa_output.usb-headset' }, proc, state)
   finished(state, 'alsa_output.speakers\n')
   assertEqual(state.volumeSinkName, 'alsa_output.usb-headset', 'a script read that predates a switch to hardware cannot overwrite it')
