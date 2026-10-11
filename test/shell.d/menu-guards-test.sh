@@ -298,6 +298,11 @@ case "$1" in
   ;;
 -Qi)
   [[ -z ${PACMAN_QI_FAILS:-} ]] || exit 1
+  # A transaction landing while the set is being read.
+  case "${PACMAN_DURING_QI:-}" in
+  install) mkdir -p "$OMARCHY_PACMAN_DB_PATH/local/zen-browser-bin-1.0-1" ;;
+  lock) touch "$OMARCHY_PACMAN_DB_PATH/db.lck" ;;
+  esac
   if [[ -d $OMARCHY_PACMAN_DB_PATH/local/gvim-9.2-1 ]]; then
     printf 'Name            : gvim\nProvides        : vim=9.2-1\n'
   fi
@@ -370,6 +375,20 @@ batch "$dir" >/dev/null
 queried "$dir" || fail "the batch after a transaction asks pacman"
 [[ -f $dir/runtime/omarchy-menu-packages ]] || fail "the batch after a transaction stores the set"
 pass "a set read while pacman holds its lock is used once and never stored"
+
+# A transaction that starts or finishes while the set is read leaves a set
+# that may be missing its packages; the checks after the queries catch both.
+for during in install lock; do
+  dir=$(cache_case "during-$during")
+  batch "$dir" PACMAN_DURING_QI="$during" >/dev/null
+  queried "$dir" || fail "a batch asks pacman before a transaction lands mid-read ($during)"
+  [[ ! -e $dir/runtime/omarchy-menu-packages ]] || fail "a set read across a transaction is never stored ($during)"
+  rm -f "$dir/db/db.lck"
+  [[ $(batch "$dir") == "bash:w:1 vim:w:1 zen:w:$([[ $during == "install" ]] && echo 1 || echo 0) " ]] ||
+    fail "the batch after a mid-read transaction answers from a fresh set ($during)" "$(batch "$dir")"
+  queried "$dir" || fail "the batch after a mid-read transaction asks pacman again ($during)"
+done
+pass "a set read across a transaction that lands mid-read is used once and never stored"
 
 # A failed query answers for its own batch, as before, but an empty or
 # provide-less set stored now would hide rows until the next transaction.
