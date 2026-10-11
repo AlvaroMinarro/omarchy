@@ -106,7 +106,9 @@ run_keyring() {
 # Everything healthy: the key and package are present, the reinstall works.
 : >"$log_file"
 rm -f "$test_tmp/list-calls"
-KEYRING_TEST_WARN=1 run_keyring >"$test_tmp/ok.out" 2>"$test_tmp/ok.err"
+# stderr goes through a pipe read to EOF: the script's filtering grep runs in a
+# process substitution, which can still be writing after the script exits.
+KEYRING_TEST_WARN=1 run_keyring 2>&1 >"$test_tmp/ok.out" | cat >"$test_tmp/ok.err"
 
 grep -F "Keys are correct" "$test_tmp/ok.out" >/dev/null ||
   fail "update-keyring reports success when the keyring is healthy" "$(cat "$test_tmp/ok.out")"
