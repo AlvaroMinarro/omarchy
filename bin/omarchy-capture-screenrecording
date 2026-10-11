@@ -426,13 +426,18 @@ stop_screenrecording() {
     omarchy-capture-screenrecording-process "${RECORDER[@]}" --signal KILL
     omarchy-notification-send -u critical -t 5000 "Screen recording error" "Recording process had to be force-killed. Video may be corrupted."
   else
-    finalize_recording
     local filename=$(cat "$RECORDING_FILE" 2>/dev/null)
-    echo "$filename"
     local preview="${filename%.mp4}-preview.png"
 
-    # Generate a preview thumbnail from the first frame
-    ffmpeg -y -i "$filename" -ss 00:00:00.1 -vframes 1 -q:v 2 "$preview" -loglevel quiet 2>/dev/null
+    # Take the preview thumbnail from the raw recording while finalizing runs,
+    # 0.2s in: the frame the finalized video, trimmed by 0.1s, shows at 0.1s.
+    # Finalizing replaces the file by renaming over it, so this read keeps the
+    # raw one open throughout.
+    ffmpeg -y -ss 00:00:00.2 -i "$filename" -vframes 1 -q:v 2 "$preview" -loglevel quiet 2>/dev/null &
+    local preview_pid=$!
+    finalize_recording
+    wait "$preview_pid"
+    echo "$filename"
 
     omarchy-notification-send "Screen recording saved" "Open with Super + Alt + , (or click this)" \
       -t 10000 --image "${preview:-$filename}" \
