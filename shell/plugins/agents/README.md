@@ -75,6 +75,7 @@ light surfaces — and the bar glyph stands in when there is none.
 | `codex` | The Codex app-server RPC | native Codex CLI session files on the built-in `openai` provider (plus pi and opencode sessions) |
 | `grok` | The credits endpoint behind Grok's `/usage` view (the billing period's included usage) | Each session's `usage.json` (the ledger `grok usage` prints: tokens by model per finished turn), plus `summary.json` for sessions |
 | `fireworks` | Estimated prepaid balance: configured funding minus rated account costs | Fireworks billing API, grouped by day and model for the last 30 days |
+| `opencodego` | OpenCode Go usage endpoint (rolling 5-hour, weekly, monthly) | OpenCode v1/v2 databases and pi/omp sessions, including omp profiles, on the exact `opencode-go` provider |
 
 When `~/.local/state/omarchy/agents/accounts/<claude|codex|grok>.json`
 registers more than one account, the `claude`, `codex`, and `grok` records
@@ -104,6 +105,10 @@ again. Fireworks reads
 pi stores in `~/.pi/agent/auth.json` when Fireworks is signed in there
 (honoring `PI_CODING_AGENT_DIR`, and pi's literal and `$ENV_VAR` key forms),
 and finally the key opencode stores in `~/.local/share/opencode/auth.json`.
+
+### OpenCode Go
+
+The collector reads `OPENCODE_GO_API_KEY` first, then the `opencode-go` key in `$XDG_DATA_HOME/opencode/auth.json` (default `~/.local/share/opencode/auth.json`, written by `/connect`). Limits are account-global; token stats come only from this machine's OpenCode database and pi/omp session files. The endpoint does not identify Go versus Go Plus, so no plan label is inferred. Missing credentials or an unavailable endpoint leave local stats usable; missing local sources produce an empty record. Local scan caches are best-effort and expire after 15 minutes or a local day/timezone change.
 
 ### Fireworks balance
 
