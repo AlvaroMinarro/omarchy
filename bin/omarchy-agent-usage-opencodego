@@ -16,10 +16,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import http.client
 import json
 import math
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
 import time
@@ -34,6 +36,34 @@ AUTH_HELP = "Run /connect in opencode and choose OpenCode Go, or set OPENCODE_GO
 USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
 PROVIDER_ID = "opencode-go"
 DEFAULT_CACHE_SECONDS = 900
+
+
+class LocalScanError(Exception):
+  """A local history could not be read completely; do not publish a record."""
+
+
+def source_exists(path: Path) -> bool:
+  try:
+    path.stat()
+    return True
+  except FileNotFoundError:
+    return False
+  except OSError as exc:
+    raise LocalScanError from exc
+
+
+def session_files(root: Path):
+  if not source_exists(root):
+    return
+
+  def fail_walk(error):
+    raise LocalScanError from error
+
+  # pathlib globbing can suppress traversal errors, yielding partial histories.
+  for directory, _, filenames in os.walk(root, onerror=fail_walk):
+    for name in filenames:
+      if name.endswith(".jsonl"):
+        yield Path(directory) / name
 
 
 def number(value: Any) -> int:
@@ -276,7 +306,7 @@ def probe_limits(key: str) -> dict[str, Any]:
   try:
     with urllib.request.urlopen(request, timeout=10) as response:
       payload = json.loads(response.read().decode("utf-8"))
-  except (urllib.error.URLError, OSError, ValueError) as exc:
+  except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
     # Exception strings may contain request details or credentials. Only
     # expose a numeric HTTP status, never the remote/network error text.
     code = getattr(exc, "code", None)
@@ -286,7 +316,7 @@ def probe_limits(key: str) -> dict[str, Any]:
         "limits": [],
         "usageStatusText": "OpenCode Go unavailable",
         "authHelpText": f"OpenCode Go usage endpoint error: {reason}",
-        "retryAdvised": True,
+        "retryAdvised": code not in (401, 403),
     }
 
   windows = {
@@ -353,7 +383,7 @@ def scan_opencode_stats(max_age_seconds: float) -> dict[str, Any]:
   db = data_home() / "opencode" / "opencode.db"
   cache_file = None
   scan_ok = False
-  if db.is_file():
+  if source_exists(db):
     cache_file = cache_root() / f"opencodego-{hashlib.sha1(str(db).encode('utf-8')).hexdigest()[:16]}.json"
     cached = read_fresh_json(cache_file, max_age_seconds)
     if cached is not None:
@@ -422,16 +452,8 @@ def scan_opencode_stats(max_age_seconds: float) -> dict[str, Any]:
           today_token_total += total
           today_tokens[model] = today_tokens.get(model, 0) + total
       scan_ok = bool(queries)
-    except sqlite3.Error:
-      # Discard partial results too: an incomplete scan is not a successful
-      # empty history, and must never overwrite the last good cache.
-      recent = {day: {"date": day, "messageCount": 0} for day in recent_dates}
-      sessions.clear()
-      active_days.clear()
-      today_sessions.clear()
-      today_tokens.clear()
-      usage_by_model.clear()
-      prompts = today_prompt_count = today_token_total = 0
+    except (sqlite3.Error, OSError) as exc:
+      raise LocalScanError from exc
     finally:
       if conn is not None:
         conn.close()
@@ -461,16 +483,22 @@ def scan_opencode_stats(max_age_seconds: float) -> dict[str, Any]:
 
 
 def scan_pi_usage(max_age_seconds: float) -> dict[str, Any] | None:
+  agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR") or (Path.home() / ".pi" / "agent"))
   roots = [
-      Path.home() / ".pi" / "agent" / "sessions",
+      agent_dir / "sessions",
       Path.home() / ".omp" / "agent" / "sessions",
   ]
   profiles = Path.home() / ".omp" / "profiles"
-  if profiles.is_dir():
-    roots.extend(profiles.glob("*/agent/sessions"))
+  if source_exists(profiles):
+    try:
+      roots.extend(profile / "agent" / "sessions" for profile in profiles.iterdir()
+                   if stat.S_ISDIR(profile.stat().st_mode))
+    except OSError as exc:
+      raise LocalScanError from exc
+  root_identity = sorted(str(root.absolute()) for root in roots)
   cache_file = cache_root() / "opencodego-pi-sessions.json"
   cached = read_fresh_json(cache_file, max_age_seconds)
-  if cached is not None:
+  if cached is not None and cached.get("sessionRoots") == root_identity:
     return cached.get("stats")
 
   today = local_date_string()
@@ -486,14 +514,8 @@ def scan_pi_usage(max_age_seconds: float) -> dict[str, Any] | None:
   today_prompt_count = 0
   today_token_total = 0
 
-  scan_ok = True
   for root in roots:
-    try:
-      files = list(root.rglob("*.jsonl")) if root.is_dir() else []
-    except OSError:
-      scan_ok = False
-      continue
-    for path in files:
+    for path in session_files(root):
       try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
           for line_number, line in enumerate(handle, 1):
@@ -543,9 +565,8 @@ def scan_pi_usage(max_age_seconds: float) -> dict[str, Any] | None:
               today_sessions.add(session_key)
               today_token_total += total
               today_tokens[model] = today_tokens.get(model, 0) + total
-      except OSError:
-        scan_ok = False
-        continue
+      except OSError as exc:
+        raise LocalScanError from exc
 
   stats = None
   if prompts > 0:
@@ -561,8 +582,8 @@ def scan_pi_usage(max_age_seconds: float) -> dict[str, Any] | None:
         "activeDays": len(active_days),
         "activeDates": sorted(active_days),
     }
-  if stats is not None and scan_ok:
-    write_json_atomic(cache_file, {"stats": stats})
+  if stats is not None:
+    write_json_atomic(cache_file, {"stats": stats, "sessionRoots": root_identity})
   return stats
 
 
@@ -573,8 +594,12 @@ def main() -> int:
   args = parser.parse_args()
 
   scan_age = 0 if args.force else DEFAULT_CACHE_SECONDS
-  stats = scan_opencode_stats(scan_age)
-  pi_usage = scan_pi_usage(scan_age)
+  try:
+    stats = scan_opencode_stats(scan_age)
+    pi_usage = scan_pi_usage(scan_age)
+  except LocalScanError:
+    print("OpenCode Go local usage scan failed.", file=sys.stderr)
+    return 1
   if pi_usage is not None:
     stats = merge_stats(stats, pi_usage)
   limits = probe_limits(api_key())

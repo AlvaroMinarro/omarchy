@@ -6,6 +6,7 @@ require_command python3
 
 PYTHONDONTWRITEBYTECODE=1 python3 - "$ROOT/bin/omarchy-agent-usage-opencodego" <<'PY'
 import contextlib
+import http.client
 import importlib.machinery
 import importlib.util
 import io
@@ -34,7 +35,7 @@ class LimitsTests(unittest.TestCase):
     env = patch.dict(os.environ, {
       "HOME": str(self.home), "XDG_DATA_HOME": str(self.home / "data"),
       "XDG_CACHE_HOME": str(self.home / "cache"), "XDG_CONFIG_HOME": str(self.home / "config"),
-      "OPENCODE_GO_API_KEY": "",
+      "OPENCODE_GO_API_KEY": "", "PI_CODING_AGENT_DIR": "",
     })
     env.start()
     self.addCleanup(env.stop)
@@ -98,10 +99,33 @@ class LimitsTests(unittest.TestCase):
           patch.object(collector.urllib.request, "urlopen", side_effect=error):
         result = collector.probe_limits(KEY)
         self.assertFalse(result["ok"])
-        self.assertTrue(result["retryAdvised"])
+        self.assertEqual(bool(result.get("retryAdvised")), getattr(error, "code", None) not in (401, 403))
         self.assertNotIn(KEY, json.dumps(result))
     with patch.object(collector.urllib.request, "urlopen", return_value=contextlib.closing(io.BytesIO(b"not json"))):
       self.assertFalse(collector.probe_limits(KEY)["ok"])
+
+  def test_incomplete_response_retains_local_stats_without_leaking(self):
+    class BrokenResponse(io.BytesIO):
+      def read(self):
+        raise http.client.IncompleteRead(b"synthetic-secret-response " + KEY.encode(), 100)
+    output, errors = io.StringIO(), io.StringIO()
+    stats = {"totalPrompts": 7, "todayTotalTokens": 123}
+    with patch.object(collector.urllib.request, "urlopen", return_value=BrokenResponse()), \
+        patch.object(collector, "scan_opencode_stats", return_value=stats), \
+        patch.object(collector, "scan_pi_usage", return_value=None), \
+        patch.dict(os.environ, {"OPENCODE_GO_API_KEY": KEY}), \
+        patch.object(sys, "argv", ["collector", "--force"]), \
+        contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+      self.assertEqual(collector.main(), 0)
+    record = json.loads(output.getvalue())
+    self.assertEqual(record["totalPrompts"], 7)
+    self.assertEqual(record["todayTotalTokens"], 123)
+    self.assertEqual(record["limits"], [])
+    self.assertTrue(record["retryAdvised"])
+    self.assertEqual(record["authHelpText"], "OpenCode Go usage endpoint error: request failed")
+    self.assertNotIn(KEY, output.getvalue() + errors.getvalue())
+    self.assertNotIn("synthetic-secret-response", output.getvalue() + errors.getvalue())
+    self.assertEqual(errors.getvalue(), "")
 
   def test_key_sources_missing_auth_and_neutral_tier(self):
     self.assertEqual(collector.api_key(), "")

@@ -35,7 +35,7 @@ class ScannerTests(unittest.TestCase):
     self.env = patch.dict(os.environ, {
       "HOME": str(self.home), "XDG_DATA_HOME": str(self.home / "data"),
       "XDG_CACHE_HOME": str(self.home / "cache"), "XDG_CONFIG_HOME": str(self.home / "config"),
-      "OPENCODE_GO_API_KEY": "", "TZ": "UTC",
+      "OPENCODE_GO_API_KEY": "", "PI_CODING_AGENT_DIR": "", "TZ": "UTC",
     })
     self.env.start()
     self.addCleanup(self.env.stop)
@@ -126,7 +126,8 @@ class ScannerTests(unittest.TestCase):
     # A readable file that is temporarily not a database must not replace
     # the good scan with a successful-looking empty cache.
     self.db.write_bytes(b"not sqlite")
-    scanner.scan_opencode_stats(0)
+    with self.assertRaises(scanner.LocalScanError):
+      scanner.scan_opencode_stats(0)
     self.assertEqual(cache.read_bytes(), good)
     self.db.write_bytes(b"")
     self.database((2,))
@@ -158,7 +159,8 @@ class ScannerTests(unittest.TestCase):
   def test_initial_database_error_does_not_cache_success(self):
     self.db.parent.mkdir(parents=True)
     self.db.write_bytes(b"not sqlite")
-    self.assert_stats(scanner.scan_opencode_stats(900), prompts=0, tokens=0, sessions=0)
+    with self.assertRaises(scanner.LocalScanError):
+      scanner.scan_opencode_stats(900)
     self.assertFalse(self.db_cache().exists())
     self.db.write_bytes(b"")
     self.database((2,))
@@ -248,10 +250,94 @@ class ScannerTests(unittest.TestCase):
       if path.name == "unreadable.jsonl":
         raise PermissionError("unreadable fixture")
       return real_open(path, *args, **kwargs)
-    with patch.object(Path, "open", open_fixture):
+    with patch.object(Path, "open", open_fixture), self.assertRaises(scanner.LocalScanError):
       scanner.scan_pi_usage(0)
     self.assertEqual(cache.read_bytes(), before)
     self.assertEqual(scanner.scan_pi_usage(0)["totalPrompts"], 3)
+
+  def test_scan_failures_publish_nothing_and_sanitize_stderr(self):
+    self.database()
+    iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    self.session(self.home / ".pi/agent/sessions/project", "good", iso)
+    secret = "synthetic-secret-path-and-key"
+    # Cover errors before opening, during discovery, and after partial rows.
+    real_stat = Path.stat
+    def stat_fixture(path, *args, **kwargs):
+      if path == self.db:
+        raise PermissionError(secret)
+      return real_stat(path, *args, **kwargs)
+    class BrokenConnection:
+      def execute(self, query):
+        if query == "PRAGMA query_only = ON":
+          return []
+        if "sqlite_master" in query:
+          return [("message",)]
+        def rows():
+          yield ("session", json.dumps({"role": "assistant", "providerID": "opencode-go",
+                 "tokens": {"input": 10}}), None)
+          raise sqlite3.OperationalError(secret)
+        return rows()
+      def close(self):
+        pass
+    self.session(self.home / ".omp/profiles/work/agent/sessions/project", "profile", iso)
+    real_scandir = scanner.os.scandir
+    def nested_failure(path):
+      if str(path).endswith("/project"):
+        raise PermissionError(secret)
+      return real_scandir(path)
+    def session_stat_failure(path, *args, **kwargs):
+      if path == self.home / ".pi/agent/sessions":
+        raise PermissionError(secret)
+      return real_stat(path, *args, **kwargs)
+    real_open = Path.open
+    def partial_read(path, *args, **kwargs):
+      if path.name == "good.jsonl":
+        def lines():
+          yield json.dumps({"type": "message", "message": {"role": "assistant",
+                           "provider": "opencode-go", "usage": {"input": 10}}})
+          raise OSError(secret)
+        return contextlib.nullcontext(lines())
+      return real_open(path, *args, **kwargs)
+    failures = [
+      ("database stat", patch.object(Path, "stat", stat_fixture)),
+      ("partial SQLite cursor", patch.object(scanner.sqlite3, "connect", return_value=BrokenConnection())),
+      ("session root stat", patch.object(Path, "stat", session_stat_failure)),
+      ("profile discovery", patch.object(Path, "iterdir", side_effect=PermissionError(secret))),
+      ("root traversal", patch.object(scanner.os, "scandir", side_effect=PermissionError(secret))),
+      ("nested traversal", patch.object(scanner.os, "scandir", side_effect=nested_failure)),
+      ("session open", patch.object(Path, "open", side_effect=PermissionError(secret))),
+      ("partial session read", patch.object(Path, "open", partial_read)),
+    ]
+    for name, failure in failures:
+      with self.subTest(failure=name), failure:
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", ["collector", "--force"]), \
+            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+          self.assertNotEqual(scanner.main(), 0)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue(), "OpenCode Go local usage scan failed.\n")
+    self.assert_stats(scanner.scan_opencode_stats(0))
+
+  def test_custom_pi_roots_replace_default_and_invalidate_only_session_cache(self):
+    self.database()
+    scanner.scan_opencode_stats(0)
+    iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    self.session(self.home / ".pi/agent/sessions/project", "default", iso)
+    self.session(self.home / ".omp/agent/sessions/project", "omp", iso)
+    self.session(self.home / ".omp/profiles/work/agent/sessions/project", "profile", iso)
+    self.assertEqual(scanner.scan_pi_usage(0)["totalPrompts"], 3)
+    with patch.dict(os.environ, {}, clear=False):
+      os.environ.pop("PI_CODING_AGENT_DIR", None)
+      self.assertEqual(scanner.scan_pi_usage(900)["totalPrompts"], 3)
+    for name, count in (("custom-a", 1), ("custom-b", 2)):
+      agent = self.home / name
+      for n in range(count):
+        self.session(agent / "sessions/project", str(n), iso)
+      with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(agent)}):
+        self.assertEqual(scanner.scan_pi_usage(900)["totalPrompts"], count + 2)
+        with patch.object(scanner.sqlite3, "connect", side_effect=AssertionError("SQLite cache invalidated")):
+          self.assert_stats(scanner.scan_opencode_stats(900))
+    self.assertEqual(scanner.scan_pi_usage(900)["totalPrompts"], 3)
 
   def test_pi_omp_profiles_and_model_day_merges(self):
     self.database()
